@@ -1,15 +1,14 @@
 /*
     protocol.rs
     ----------------------------------------------------------------------------
-    Defines the P2P messaging protocol using a strongly-typed enum.
+    Defines the messaging protocol for RustDHTShare.
     
-    Features:
-      - Each variant represents a different type of message exchanged between nodes.
-      - Uses Serde for JSON serialization/deserialization.
+    - Uses a strongly-typed enum to represent all message variants.
+    - JSON serialization/deserialization is handled via Serde.
     
     Developer Notes:
-      - The protocol supports Join, Ping/Pong, Store, Lookup, FileRequest, and FileData messages.
-      - Additional variants can be added as the project expands.
+      - Supports Join, Ping, Pong, Store, Lookup, FileRequest, FileData, and Ack messages.
+      - Easily extensible as new features are added.
     ----------------------------------------------------------------------------
 */
 
@@ -17,6 +16,7 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
+    
     Join { node_id: String },
 
     Ping,
