@@ -17,29 +17,19 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
-    /// Join: Sent by a node to join the network.
     Join { node_id: String },
 
-    /// Ping: A heartbeat message to verify node availability.
     Ping,
 
-    /// Pong: Response to a Ping message.
     Pong,
 
-    /// Store: Instructs the receiver to store a key-value pair in the DHT.
-    /// The response might echo the stored pair.
     Store { key: String, value: String },
 
-    /// Lookup: Requests the value associated with a key in the DHT.
-    /// The response should include the value if found.
     Lookup { key: String },
 
-    /// FileRequest: Requests a file or a file chunk.
     FileRequest { file_id: String },
 
-    /// FileData: Carries the data of a requested file or chunk.
     FileData { file_id: String, data: Vec<u8> },
 
-    /// Ack: Acknowledgment message used as a default reply.
     Ack,
 }
