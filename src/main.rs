@@ -1,23 +1,20 @@
 /*
     main.rs
     ----------------------------------------------------------------------------
-    Entry point for the P2P File Sharing project.
+    Entry point for RustDHTShare: A Distributed File Sharing Platform in Rust.
     
     Features:
-      - Parses command-line arguments to determine the node's mode.
-      - Supports a bootstrap mode (server) and a node mode with subcommands for 
-        storing and looking up key-value pairs in the DHT.
-      - Utilizes Tokio for asynchronous networking.
+      - Command-line argument parsing via Clap.
+      - Supports both bootstrap (server) and node (client) modes.
+      - Subcommands for joining the network, storing key-value pairs, and performing lookups.
+      - Logging for debugging and traceability.
     
-    Developer Notes:
-      - Extensively debugged with multiple scenarios.
-      - Error handling and logging have been improved to trace issues during runtime.
-      - Use Ctrl+C to gracefully shut down the application.
+    Debugged extensively with various scenarios.
     ----------------------------------------------------------------------------
 */
 
-use std::env;
-use tokio::signal;
+use clap::{Parser, Subcommand};
+use log::{info, error};
 use tokio::net::TcpStream;
 use tokio::io::{BufReader, AsyncBufReadExt, AsyncWriteExt};
 use serde_json;
@@ -29,114 +26,138 @@ mod protocol;
 
 use protocol::Message;
 
+/// RustDHTShare: A Distributed File Sharing Platform in Rust.
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Command to run.
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run as the bootstrap node (server mode).
+    Bootstrap {
+        /// Port to listen on (default: 8080).
+        #[arg(short, long, default_value_t = 8080)]
+        port: u16,
+    },
+    /// Run as a regular node (client mode).
+    Node {
+        /// Subcommands for node operations.
+        #[command(subcommand)]
+        action: Option<NodeAction>,
+    },
+}
+
+#[derive(Subcommand)]
+enum NodeAction {
+    /// Join the network.
+    Join,
+    /// Store a key-value pair.
+    Store {
+        /// The key to store.
+        key: String,
+        /// The corresponding value.
+        value: String,
+    },
+    /// Lookup a value by key.
+    Lookup {
+        /// The key to lookup.
+        key: String,
+    },
+}
+
 #[tokio::main]
 async fn main() {
-    // Parse command-line arguments.
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} [bootstrap|node]", args[0]);
-        return;
-    }
-    let mode = &args[1];
+    // Initialize logging using env_logger. Configure log level via the RUST_LOG env var.
+    env_logger::init();
+    
+    // Parse CLI arguments.
+    let cli = Cli::parse();
 
-    // Dispatch based on selected mode.
-    match mode.as_str() {
-        "bootstrap" => {
-            // Bootstrap mode: starts the server to listen for incoming connections.
-            println!("Starting bootstrap node on port 8080...");
-            network::start_server(8080).await;
+    match cli.command {
+        Commands::Bootstrap { port } => {
+            info!("Starting bootstrap node on port {}...", port);
+            network::start_server(port).await;
         },
-        "node" => {
-            // Node mode: can execute subcommands to store or lookup data.
-            if args.len() == 2 {
-                println!("Starting a regular node (joining network)...");
-                network::join_network("127.0.0.1:8080").await;
-            } else {
-                match args[2].as_str() {
-                    "store" => {
-                        if args.len() < 5 {
-                            eprintln!("Usage: {} node store <key> <value>", args[0]);
-                            return;
-                        }
-                        let key = args[3].clone();
-                        let value = args[4].clone();
-                        store_key_value(key, value).await;
-                    }
-                    "lookup" => {
-                        if args.len() < 4 {
-                            eprintln!("Usage: {} node lookup <key>", args[0]);
-                            return;
-                        }
-                        let key = args[3].clone();
-                        lookup_key(key).await;
-                    }
-                    _ => {
-                        eprintln!("Unknown subcommand: {}", args[2]);
-                    }
-                }
+        Commands::Node { action } => {
+            match action {
+                // If no subcommand is provided, join the network by default.
+                None | Some(NodeAction::Join) => {
+                    info!("Starting node: joining network at 127.0.0.1:8080...");
+                    network::join_network("127.0.0.1:8080").await;
+                },
+                Some(NodeAction::Store { key, value }) => {
+                    info!("Storing key-value pair: {} -> {}", key, value);
+                    store_key_value(key, value).await;
+                },
+                Some(NodeAction::Lookup { key }) => {
+                    info!("Looking up key: {}", key);
+                    lookup_key(key).await;
+                },
             }
         },
-        _ => {
-            eprintln!("Unknown mode. Use 'bootstrap' or 'node'");
-        }
-    }
-
-    // Wait for a shutdown signal (Ctrl+C) to gracefully terminate the application.
-    match signal::ctrl_c().await {
-        Ok(_) => println!("Received shutdown signal, terminating..."),
-        Err(e) => eprintln!("Error waiting for shutdown signal: {:?}", e),
     }
 }
 
 /// Connects to the bootstrap node and sends a Store command.
-/// Debug logs and error messages are printed during the process.
+/// Logs detailed error information for debugging.
 async fn store_key_value(key: String, value: String) {
     match TcpStream::connect("127.0.0.1:8080").await {
         Ok(mut stream) => {
-            // Construct the Store message.
             let msg = Message::Store { key, value };
             let msg_json = serde_json::to_string(&msg).unwrap();
             if let Err(e) = stream.write_all(msg_json.as_bytes()).await {
-                eprintln!("Error sending store message: {:?}", e);
+                error!("Error sending store message: {:?}", e);
+                return;
             }
-            // Signal end-of-message with a newline.
-            stream.write_all(b"\n").await.unwrap();
-
-            // Read and deserialize the response.
+            if let Err(e) = stream.write_all(b"\n").await {
+                error!("Error sending newline: {:?}", e);
+                return;
+            }
             let mut reader = BufReader::new(stream);
             let mut response = String::new();
-            reader.read_line(&mut response).await.unwrap();
-            let resp_msg: Message = serde_json::from_str(&response).unwrap();
-            println!("Store response: {:?}", resp_msg);
-        }
-        Err(e) => {
-            eprintln!("Could not connect to bootstrap node: {:?}", e);
-        }
+            if let Err(e) = reader.read_line(&mut response).await {
+                error!("Error reading response: {:?}", e);
+                return;
+            }
+            match serde_json::from_str::<Message>(&response) {
+                Ok(resp_msg) => info!("Store response: {:?}", resp_msg),
+                Err(e) => error!("Failed to parse response: {:?}", e),
+            }
+        },
+        Err(e) => error!("Could not connect to bootstrap node: {:?}", e),
     }
 }
 
 /// Connects to the bootstrap node and sends a Lookup command.
-/// The returned response is printed to standard output.
+/// Logs errors and prints the response.
 async fn lookup_key(key: String) {
     match TcpStream::connect("127.0.0.1:8080").await {
         Ok(mut stream) => {
-            // Construct the Lookup message.
             let msg = Message::Lookup { key };
             let msg_json = serde_json::to_string(&msg).unwrap();
             if let Err(e) = stream.write_all(msg_json.as_bytes()).await {
-                eprintln!("Error sending lookup message: {:?}", e);
+                error!("Error sending lookup message: {:?}", e);
+                return;
             }
-            stream.write_all(b"\n").await.unwrap();
-
-            // Read and parse the response.
+            if let Err(e) = stream.write_all(b"\n").await {
+                error!("Error sending newline: {:?}", e);
+                return;
+            }
             let mut reader = BufReader::new(stream);
             let mut response = String::new();
-            reader.read_line(&mut response).await.unwrap();
-            let resp_msg: Message = serde_json::from_str(&response).unwrap();
-            println!("Lookup response: {:?}", resp_msg);
-        }
-        Err(e) => {
-            eprintln!("Could not connect to bootstrap node: {:?}", e);
-        }
+            if let Err(e) = reader.read_line(&mut response).await {
+                error!("Error reading response: {:?}", e);
+                return;
+            }
+            match serde_json::from_str::<Message>(&response) {
+                Ok(resp_msg) => info!("Lookup response: {:?}", resp_msg),
+                Err(e) => error!("Failed to parse response: {:?}", e),
+            }
+        },
+        Err(e) => error!("Could not connect to bootstrap node: {:?}", e),
     }
 }
